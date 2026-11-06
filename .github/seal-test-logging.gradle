@@ -1,0 +1,58 @@
+// Prints per-suite and total test counts plus every skipped test with its reason,
+// because Gradle's test runner is silent on success.
+import java.util.concurrent.atomic.AtomicLong
+
+def totals = [run: new AtomicLong(), passed: new AtomicLong(), failed: new AtomicLong(), skipped: new AtomicLong()]
+
+def skipReason = { Test task, String className, String methodName ->
+	try {
+		def urls = (task.classpath.files.collect { it.toURI().toURL() }) as URL[]
+		def loader = new URLClassLoader(urls, (ClassLoader) null)
+		def cls = Class.forName(className, false, loader)
+		def findAnno = { java.lang.reflect.AnnotatedElement el ->
+			for (a in el.annotations) {
+				def n = a.annotationType().name
+				if (n == 'org.junit.Ignore' || n == 'org.junit.jupiter.api.Disabled') {
+					def v = a.annotationType().getMethod('value').invoke(a)
+					return "@${a.annotationType().simpleName}" + (v ? "(\"${v}\")" : ' (no reason given in annotation)')
+				}
+			}
+			return null
+		}
+		def m = cls.methods.find { it.name == methodName } ?: cls.declaredMethods.find { it.name == methodName }
+		def r = (m ? findAnno(m) : null)
+		if (r) return "method annotated ${r}"
+		r = findAnno(cls)
+		if (r) return "class annotated ${r}"
+		return 'assumption not met (Assume/Assumptions precondition false at runtime)'
+	} catch (Throwable t) {
+		return "reason lookup failed: ${t}"
+	}
+}
+
+allprojects {
+	tasks.withType(Test).configureEach { Test task ->
+		task.testLogging {
+			events 'failed', 'skipped'
+			exceptionFormat 'full'
+		}
+		task.afterTest { desc, result ->
+			if (result.resultType == TestResult.ResultType.SKIPPED) {
+				println "SKIPPED TEST: ${desc.className} > ${desc.name} -- reason: ${skipReason(task, desc.className, desc.name)}"
+			}
+		}
+		task.afterSuite { desc, result ->
+			if (desc.parent == null) {
+				totals.run.addAndGet(result.testCount)
+				totals.passed.addAndGet(result.successfulTestCount)
+				totals.failed.addAndGet(result.failedTestCount)
+				totals.skipped.addAndGet(result.skippedTestCount)
+				println "TEST SUMMARY [${task.path}]: ${result.resultType} -- ${result.testCount} tests, ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped"
+			}
+		}
+	}
+}
+
+gradle.buildFinished {
+	println "TEST TOTAL: ${totals.run} tests, ${totals.passed} passed, ${totals.failed} failed, ${totals.skipped} skipped"
+}

@@ -1,11 +1,18 @@
 name: PR Build
 
-on: pull_request
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: 'Gradle test task + filter to run instead of the full build (e.g. :spring-security-web:test --tests FooTests)'
+        required: false
+        default: ''
 
 jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 50
 
     steps:
       - uses: actions/checkout@v2
@@ -14,9 +21,20 @@ jobs:
         with:
           java-version: '8'
       - name: Cache Gradle packages
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         with:
           path: ~/.gradle/caches
           key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
       - name: Build with Gradle
-        run: ./gradlew clean build --continue
+        run: |
+          if [ -n "${{ inputs.test-filter }}" ]; then
+            ./gradlew -I .github/seal-test-logging.gradle clean :spring-security-web:jar ${{ inputs.test-filter }}
+          else
+            ./gradlew -I .github/seal-test-logging.gradle clean build --continue
+          fi
+      - name: Upload spring-security-web jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: spring-security-web
+          path: web/build/libs/spring-security-web-*.RELEASE.jar
+          if-no-files-found: error
